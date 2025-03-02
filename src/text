@@ -1,0 +1,1735 @@
+import React, { useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, TouchableWithoutFeedback, Keyboard } from 'react-native';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "../util/FirebaseConfig";
+import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export default function AuthScreen() {
+    const navigation = useNavigation();
+    const [isLogin, setIsLogin] = useState(true);
+    const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('')
+    const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+
+    const signUp = async () => {
+        try {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            if (userCredential.user) {
+                await AsyncStorage.setItem('userToken', userCredential.user.uid); // Store user token
+                navigation.navigate("ProfileCreation");
+            }
+        } catch (error) {
+            alert("Sign up Failed: " + error.message);
+        }
+    };
+
+    const signIn = async () => {
+        try {
+            const userCredential = await signInWithEmailAndPassword(auth, email, password);
+            if (userCredential.user) {
+                await AsyncStorage.setItem('userToken', userCredential.user.uid); // Store user token
+                navigation.navigate("ProfileCreation");
+            }
+        } catch (error) {
+            alert("Sign in Failed: " + error.message);
+        }
+    };
+
+    const handleAuth = async () => {
+        if (!isLogin && password !== confirmPassword) {
+            alert("Passwords don't match");
+        } else if (!isLogin) {
+            await signUp();
+        } else {
+            await signIn();
+        }
+    };
+
+    return (
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View style={styles.container}>
+                <Text style={styles.title}>{isLogin ? 'Log In' : 'Sign Up'}</Text>
+                <TextInput
+                    style={styles.input}
+                    placeholder="Email"
+                    placeholderTextColor={"#777"}
+                    keyboardType="email-address"
+                    value={email}
+                    onChangeText={setEmail}
+                />
+
+                <TextInput
+                    style={styles.input}
+                    placeholder="Password"
+                    placeholderTextColor={"#777"}
+                    secureTextEntry
+                    value={password}
+                    onChangeText={setPassword}
+                />
+                {!isLogin && (
+                    <TextInput
+                        style={styles.input}
+                        placeholder="Confirm Password"
+                        placeholderTextColor={"#777"}
+                        secureTextEntry
+                        value={confirmPassword}
+                        onChangeText={setConfirmPassword}
+                    />
+                )}
+                <TouchableOpacity style={styles.button} onPress={handleAuth}>
+                    <Text style={styles.buttonText}>{isLogin ? 'Log In' : 'Sign Up'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setIsLogin(!isLogin)}>
+                    <Text style={styles.switchText}>
+                        {isLogin ? "Don't have an account? Sign up" : "Already have an account? Log in"}
+                    </Text>
+                </TouchableOpacity>
+            </View>
+        </TouchableWithoutFeedback>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: {
+        backgroundColor: '#000',
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    title: {
+        color: "white",
+        fontSize: 24,
+        fontWeight: 'bold',
+        marginBottom: 20,
+    },
+    input: {
+        width: '100%',
+        padding: 10,
+        borderWidth: 1,
+        borderColor: '#ccc',
+        borderRadius: 5,
+        marginBottom: 10,
+        color: "white"
+    },
+    button: {
+        backgroundColor: '#007bff',
+        padding: 10,
+        borderRadius: 5,
+        alignItems: 'center',
+        width: '100%',
+    },
+    buttonText: {
+        color: '#fff',
+        fontSize: 16,
+    },
+    switchText: {
+        marginTop: 10,
+        color: '#007bff',
+    },
+});
+import React, {useEffect, useState} from "react";
+import {
+    View,
+    TextInput,
+    StyleSheet,
+    TouchableOpacity,
+    Text,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    TouchableWithoutFeedback,
+    Keyboard,
+    Image
+} from "react-native";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import TakePhoto from "../components/PostComponents/TakePhoto";
+import * as FileSystem from "expo-file-system";
+import {getAuth} from "firebase/auth";
+import { collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
+import { db } from "../util/FirebaseConfig"
+import { v4 as uuidv4 } from "react-native-uuid";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {getUserIdFromStorage} from "../helpers/userDataHelperPosts";
+import {uploadImage} from "../helpers/firebasePostHelper";
+
+// File system paths
+const userDir = FileSystem.documentDirectory + 'user';
+const imageDir = FileSystem.documentDirectory + 'images';
+const userFilePath = `${userDir}/user.json`;
+const dirNames = [userDir, imageDir];
+
+
+
+
+/**
+ * Reads and parses the user JSON file.
+ * @returns Parsed user data.
+ */
+const userJSON = async () => {
+    const JSONData = await FileSystem.readAsStringAsync(userFilePath);
+    return JSON.parse(JSONData);
+};
+
+/**
+ * Ensures required directories exist; creates them if they do not.
+ * @param {string[]} dirNames - Array of directory paths.
+ */
+const ensureDirsExist = async (dirNames) => {
+    for (const dir of dirNames) {
+        const dirInfo = await FileSystem.getInfoAsync(dir);
+        if (!dirInfo.exists) {
+            console.log(`Directory ${dir} does not exist, creating ...`);
+            await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+        } else {
+            console.log(`${dir} exists`);
+        }
+    }
+};
+
+
+/**
+ * Main component for creating a post.
+ * @param navigation - Navigation object for navigating screens.
+ */
+export default function CreatePostScreen({ navigation }) {
+    const [description, setDescription] = useState("");
+    const [cameraOn, setCameraOn] = useState(false);
+    const [photo, setPhoto] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [downloadURL, setDownloadURL] = useState(null)
+
+
+    useEffect(() => {
+        const fetchUserId = async () => {
+            const id = await getUserIdFromStorage(); // Retrieve userId from AsyncStorage
+            setUserId(id);
+        };
+        fetchUserId();
+    }, []);
+
+    const userPostCollection = collection(db, 'posts')
+
+    const addPost = async () => {
+    if (userId) {
+        try {
+            const url = await savePhotoToCloud()
+            await addDoc(userPostCollection, {
+                description:description,
+                userId: userId,
+                timestamp: new Date().toISOString(),
+                photoURL: url
+            });
+        } catch (error) {
+            console.error("Error adding post:", error);
+            Alert.alert("Error", "There was an error submitting your post. Please try again.");
+            console.log(user)
+        }
+    }
+};
+    /**
+     * Opens the camera to take a photo.
+     */
+    const handleTakePhoto = () => {
+        setCameraOn(true);
+    };
+
+    /**
+     * Saves the photo locally and updates the user's posts.
+     */
+    // const savePhotoLocally = async () => {
+    //     const photoFileName = photo.uri.split('/').pop();
+    //     const newUri = `${imageDir}/${photoFileName}`;
+    //
+    //     try {
+    //         await FileSystem.moveAsync({
+    //             from: photo.uri,
+    //             to: newUri,
+    //         });
+    //         await updateUserPosts(newUri);
+    //     } catch (error) {
+    //         console.error("Error saving photo:", error);
+    //     }
+    // };
+    const savePhotoToCloud = async () => {
+        return await uploadImage(photo.uri, userId)
+        };
+    /**
+     * Updates the user's posts with a new post entry.
+     * @param {string} photoLocation - Path to the saved photo.
+     */
+    const updateUserPosts = async (photoLocation) => {
+        const data = await userJSON();
+        data.posts.push({
+            timestamp: new Date().toISOString(),
+            description: description,
+            imageFileLocation: photoLocation,
+        });
+        await FileSystem.writeAsStringAsync(userFilePath, JSON.stringify(data, null, 2));
+    };
+
+    /**
+     * Handles submitting the post, ensuring directories exist and saving data.
+     */
+    const handleSubmitPost = async () => {
+        if (description.trim() === "") {
+            Alert.alert("Missing Description", "Please write about your miracle before submitting.");
+            return;
+        }
+
+        await ensureDirsExist(dirNames);
+        await addPost()
+        Alert.alert("Post Submitted", "Your post has been successfully created!");
+        navigation.navigate("FeedScreen")
+    };
+
+    /**
+     * Handles receiving the photo from the camera.
+     * @param photo - Photo object returned by the camera.
+     */
+    const handlePhoto = (photo) => {
+        setCameraOn(false);
+        setPhoto(photo);
+    };
+
+    // Show camera if it is enabled
+    if (cameraOn) return <TakePhoto handleCloseCamera={handlePhoto} />;
+
+    return (
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                <View style={styles.container}>
+                    {/* Back Button */}
+                    <TouchableOpacity
+                        onPress={() => navigation.navigate("FeedScreen")}
+                        style={styles.backButton}
+                    >
+                        <MaterialIcons name="arrow-back" size={30} color="white" />
+                    </TouchableOpacity>
+
+                    {/* Display photo if available */}
+                    {photo && photo.uri && (
+                        <Image
+                            source={{ uri: photo.uri }}
+                            style={styles.postPhoto}
+                            resizeMode="cover"
+                        />
+                    )}
+
+                    {/* Button to open the camera */}
+                    <TouchableOpacity
+                        style={photo ? styles.photoButtonAfter : styles.photoButtonBefore}
+                        onPress={handleTakePhoto}
+                    >
+                        <MaterialIcons name="photo-camera" size={photo ? 30 : 60} color="white" />
+                    </TouchableOpacity>
+
+                    {/* Input for post description */}
+                    <TextInput
+                        style={styles.textInput}
+                        placeholder="Write about your miracle..."
+                        placeholderTextColor="gray"
+                        multiline
+                        value={description}
+                        onChangeText={setDescription}
+                        keyboardType="default"
+                        returnKeyType="done"
+                        onSubmitEditing={Keyboard.dismiss}
+                    />
+
+                    {/* Submit post button */}
+                    <TouchableOpacity style={styles.submitButton} onPress={handleSubmitPost}>
+                        <Text style={styles.submitText}>Submit Post</Text>
+                    </TouchableOpacity>
+                </View>
+            </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
+    );
+}
+
+// Styles
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: "#000",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+    },
+    photoButtonBefore: {
+        width: 80,
+        height: 80,
+        backgroundColor: "#444",
+        borderRadius: 40,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 20,
+    },
+    photoButtonAfter: {
+        width: 50,
+        height: 50,
+        backgroundColor: "#444",
+        borderRadius: 40,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 20,
+    },
+    postPhoto: {
+        width: "50%",
+        height: "30%",
+        borderRadius: 15,
+        marginBottom: 25,
+        borderColor: "#C0c0c0",
+        borderWidth: 3,
+    },
+    backButton: {
+        position: "absolute",
+        top: 50,
+        left: 20,
+        padding: 10,
+    },
+    textInput: {
+        width: "100%",
+        backgroundColor: "#222",
+        borderRadius: 10,
+        color: "white",
+        padding: 15,
+        fontSize: 16,
+        marginBottom: 20,
+        textAlignVertical: "top",
+        minHeight: 150,
+    },
+    submitButton: {
+        backgroundColor: "#007AFF",
+        paddingVertical: 15,
+        paddingHorizontal: 40,
+        borderRadius: 10,
+    },
+    submitText: {
+        color: "white",
+        fontSize: 18,
+        fontWeight: "bold",
+    },
+});
+import React, {useEffect, useState} from "react";
+import { View, StyleSheet, Image, SafeAreaView, FlatList, TouchableOpacity, Text } from "react-native";
+import user from "../data/user.json";
+import Post from "../components/PostComponents/Post";
+import { posts } from '../data/posts.json';
+import {getUserIdFromStorage} from "../helpers/userDataHelperPosts";
+import {fetchAllPosts} from "../helpers/firebasePostHelper";
+
+const profilePicture = require("../data/profile.png");
+const logo = require("../assets/Logo.png");
+
+/**
+ * Renders a single post item in the FlatList.
+ * @param {Object} postData - Contains the data of the post to render.
+ * @returns {JSX.Element} A Post component.
+ */
+function renderPost(postData) {
+    return (
+        <Post image={postData.item.data.photoURL} caption={postData.item.caption} />
+    );
+}
+
+/**
+ * Main feed screen of the app.
+ * Displays a header, a feed of posts, and a button to create a post.
+ * @param  navigation - Navigation object for navigating between screens.
+ * @returns The FeedScreen component.
+ */
+function FeedScreen({ navigation }) {
+    const [userId, setUserId] = useState(null)
+    const [posts, setPosts] = useState(null)
+
+    useEffect(() => {
+        console.log("posts",posts)
+    }, [posts]);
+    useEffect(() => {
+        const fetchUserId = async () => {
+            const id = await getUserIdFromStorage(); // Retrieve userId from AsyncStorage
+            setUserId(id);
+        };
+
+        const fetchAllPostsFromFirebase = async () =>{
+            setPosts(await fetchAllPosts())
+        }
+        fetchUserId();
+        fetchAllPostsFromFirebase()
+    }, []);
+
+    return (
+        <SafeAreaView style={styles.safeArea}>
+            {/* Header with app logo and profile picture */}
+            <View style={styles.header}>
+                <Image source={logo} style={styles.logo} />
+                <TouchableOpacity onPress={() => navigation.navigate("Profile")}>
+                    <Image source={profilePicture} style={styles.profilePicture} />
+                </TouchableOpacity>
+            </View>
+
+            {/* Feed container with posts */}
+            <View style={styles.feedContainer}>
+                <FlatList
+                    style={styles.feedList}
+                    data={posts}
+                    renderItem={renderPost}
+                />
+            </View>
+
+            {/* Floating button to navigate to the Create Post screen */}
+            <TouchableOpacity
+                style={styles.prayerButton}
+                onPress={() => navigation.navigate("CreatePost")}
+            >
+                <Text style={styles.prayerText}>🙏</Text>
+            </TouchableOpacity>
+        </SafeAreaView>
+    );
+}
+
+const styles = StyleSheet.create({
+    safeArea: {
+        flex: 1,
+        backgroundColor: "#000", // Set background to black
+    },
+    header: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: "#000", // Header background color
+    },
+    logo: {
+        width: 100,
+        height: 50,
+        resizeMode: "contain",
+    },
+    profilePicture: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+    },
+    feedList: {
+        paddingHorizontal: 5,
+        paddingVertical: 10,
+    },
+    feedContainer: {
+        flex: 1,
+        justifyContent: "flex-start",
+    },
+    prayerButton: {
+        position: "absolute",
+        bottom: 20,
+        right: 20,
+        backgroundColor: "#89CFF0",
+        padding: 15,
+        borderRadius: 50,
+    },
+    prayerText: {
+        fontSize: 40,
+        color: "white",
+    },
+});
+
+export default FeedScreen;
+import React, {useEffect, useState} from 'react';
+import {
+    View,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    StyleSheet,
+    TouchableWithoutFeedback,
+    Keyboard,
+    Alert
+} from 'react-native';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import {auth, db} from "../util/FirebaseConfig";
+import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+import {addDoc, collection, getDocs, query, where} from "firebase/firestore";
+import ProfileImagePicker from "../components/ProfileComponents/ProfileImagePicker";
+import {handleData, usernameExists} from '../helpers/firebaseProfileCreationHelper'
+
+export default function ProfileCreationScreen() {
+    const [firstName, setFirstName] =useState('')
+    const [lastName, setLastName] =useState('')
+    const [username, setUsername] =useState('')
+    const [profilePictureModal, setProfilePictureModal] = useState(false)
+    const [profilePhoto, setProfilePhoto] = useState(null)
+    const [isDupeUsername, setIsDupeUsername] = useState(false)
+    const [userId, setUserId] = useState(null)
+
+    const navigation = useNavigation();
+
+
+    const getUserIdFromStorage = async () => {
+        try {
+            const storedUserId = await AsyncStorage.getItem('userId');
+            if (storedUserId !== null) {
+                setUserId(storedUserId); // Set the userId in state
+            }
+        } catch (error) {
+            console.error('Error retrieving userId from AsyncStorage:', error);
+        }
+    };
+
+    useEffect(()=>{
+        getUserIdFromStorage()
+    }, [])
+
+
+    const handleProfilePhotoModal = (photo) =>{
+        if (!profilePictureModal){
+            setProfilePictureModal(true)
+        }
+        else{
+            if (photo){
+                setProfilePhoto(photo)
+                console.log("Here is photo", photo)
+            }
+            setProfilePictureModal(false)
+        }
+    }
+
+    const handleUsernameCheck = async () =>{
+        console.log(username)
+        const usernameDupeCheck = await usernameExists(username)
+        setIsDupeUsername(usernameDupeCheck)
+    }
+    const sendData = async () =>{
+        if (!firstName) {
+            Alert.alert("First Name is required");
+        } else if (!lastName) {
+            Alert.alert("Last Name is required");
+        } else if (!username) {
+            Alert.alert("Username is required");
+        } else if (!profilePhoto) {
+            Alert.alert("Profile photo is required");
+        } else if (isDupeUsername){
+            Alert.alert("Username is taken")
+        }else
+         {
+            // All fields are present, you can proceed with further actions
+             await handleData(userId, firstName, lastName, username, profilePhoto)
+             navigation.navigate("Profile")
+        }
+
+
+    }
+
+    return (
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+
+            <View style={styles.container}>
+                {profilePictureModal && <ProfileImagePicker onClose={handleProfilePhotoModal}></ProfileImagePicker>}
+
+                <Text style={styles.title}>Create Your Profile</Text>
+                <TextInput
+                    style={styles.input}
+                    placeholder="First Name"
+                    placeholderTextColor={"#777"}
+                    value={firstName}
+                    onChangeText={setFirstName}
+                />
+                <TextInput
+                    style={styles.input}
+                    placeholder="Last Name"
+                    placeholderTextColor={"#777"}
+                    value={lastName}
+                    onChangeText={setLastName}
+                />
+                <TextInput
+                    style={styles.input}
+                    placeholder="Username"
+                    placeholderTextColor={"#777"}
+                    value={username}
+                    onChangeText={setUsername}
+                    onBlur={handleUsernameCheck}
+                />
+                <TouchableOpacity style={styles.button} onPress={handleProfilePhotoModal}>
+                    <Text style={styles.buttonText}>Choose Profile Image</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.button} onPress={sendData}>
+                    <Text style={styles.buttonText}>Create Account</Text>
+                </TouchableOpacity>
+            </View>
+        </TouchableWithoutFeedback>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: {
+        backgroundColor: '#000',
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    title: {
+        color: "white",
+        fontSize: 24,
+        fontWeight: 'bold',
+        marginBottom: 20,
+    },
+    input: {
+        width: '100%',
+        padding: 10,
+        borderWidth: 1,
+        borderColor: '#ccc',
+        borderRadius: 5,
+        marginBottom: 10,
+        color: "white"
+    },
+    button: {
+        backgroundColor: '#007bff',
+        padding: 10,
+        borderRadius: 5,
+        alignItems: 'center',
+        width: '100%',
+        marginBottom:10
+    },
+    buttonText: {
+        color: '#fff',
+        fontSize: 16,
+    },
+    switchText: {
+        marginTop: 10,
+        color: '#007bff',
+    },
+});
+import { Image, View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Button } from 'react-native';
+import { useEffect, useState } from "react";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fetchPosts } from '../helpers/firebasePostHelper'; // Firebase helper
+import { readUserData } from '../helpers/userDataHelperPosts';
+import {clearUserPosts} from "../helpers/firebasePostHelper";// User data helper
+import {getData, getProfilePicture} from "../helpers/firebaseProfileData";
+import { getAuth } from "firebase/auth";
+import { auth } from "../util/FirebaseConfig";
+import ProfileScreenPosts from "../components/ProfileComponents/ProfileScreenPosts";
+
+// ProfileScreen Component
+// ProfileScreen Component
+function ProfileScreen({ navigation }) {
+    const [userData, setUserData] = useState(null);
+    const [userId, setUserId] = useState(null);  // State for storing userId
+    const [postData, setPostData] = useState(null); // State for storing posts data
+    // Fetch userId from AsyncStorage
+    const getUserIdFromStorage = async () => {
+        try {
+            const storedUserId = await AsyncStorage.getItem('userId');
+            if (storedUserId !== null) {
+                setUserId(storedUserId); // Set the userId in state
+            }
+        } catch (error) {
+            console.error('Error retrieving userId from AsyncStorage:', error);
+        }
+    };
+
+    // Initialize data and fetch userId on component mount
+    useEffect(() => {
+        getUserIdFromStorage(); // Retrieve userId from AsyncStorage
+        const fetchData = async () => {
+            const data = await getData();
+            setUserData(data);
+
+        };
+        fetchData();
+    }, []);
+
+    // Fetch posts from Firestore when userId is available
+    useEffect(() => {
+        if (userId) {
+            fetchPosts(userId).then(fetchedPosts => {
+                setPostData(fetchedPosts); // Update postData state
+            });
+        }
+    }, [userId]);
+
+    // Handle user sign-out
+    const handleSignOut = async () => {
+        try {
+            navigation.navigate("Auth");
+            await auth.signOut(); // Firebase sign-out method
+            await AsyncStorage.removeItem('userId'); // Remove userId from AsyncStorage
+            console.log("User signed out.");
+        } catch (error) {
+            console.error("Error signing out:", error);
+        }
+    };
+
+    // Clear user posts
+    const clearPosts = async () => {
+        await clearUserPosts(userId); // Clear posts in local storage
+    };
+
+    // Profile picture and greeting text
+    const imageSources = {
+        "profile.png": require('../data/profile.png'),
+    };
+
+    // Make sure userData is not null before destructuring
+    const { firstName, lastName, profilePhotoUrl, username } = userData || {};
+    console.log(profilePhotoUrl, "DADDY")
+
+    // Component rendering
+    return (
+        <SafeAreaView style={styles.container}>
+            {/* Back button */}
+            <TouchableOpacity
+                onPress={() => navigation.navigate("FeedScreen")}
+                style={styles.backButton}
+            >
+                <MaterialIcons name="arrow-back" size={30} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity
+                onPress={handleSignOut}
+                style={styles.signOutButton}
+            >
+                <MaterialIcons name={"logout"} size={30} color="red"></MaterialIcons>
+            </TouchableOpacity>
+
+            {/* Profile picture */}
+
+            {profilePhotoUrl && <Image
+                source={{uri:profilePhotoUrl}}
+                style={styles.profileImage}
+            />
+            }
+            {/* User greeting and pins */}
+            <Text style={styles.greetingText}>Hello {firstName} 👋</Text>
+            <Text style={styles.pinsText}>📌 Pins</Text>
+
+            {/* Clear posts button */}
+            <Button title={"Clear Posts"} onPress={clearPosts} />
+
+            {/* Render posts if postData exists */}
+            {postData && <ProfileScreenPosts postData={postData} />}
+        </SafeAreaView>
+    );
+}
+
+
+// Styles
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        alignItems: 'center',
+        backgroundColor: 'black',
+    },
+    profileImage: {
+        marginTop: 15,
+        width: 120,
+        height: 120,
+        borderRadius: 60,
+        borderWidth: 2,
+        borderColor: 'white',
+        marginBottom: 20,
+    },
+    greetingText: {
+        fontSize: 24,
+        color: 'white',
+        fontWeight: 'bold',
+        marginBottom: 10,
+    },
+    pinsText: {
+        fontSize: 18,
+        color: 'lightgray',
+    },
+    backButton: {
+        position: 'absolute',
+        top: 50,
+        left: 20,
+        padding: 10,
+    },
+    signOutButton: {
+        position: 'absolute',
+        top: 50,
+        right: 20,
+        padding: 10,
+    },
+});
+
+export default ProfileScreen;
+------------------------[AuthScreen.js]------------------------
+import React, { useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, TouchableWithoutFeedback, Keyboard } from 'react-native';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "../util/FirebaseConfig";
+import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export default function AuthScreen() {
+    const navigation = useNavigation();
+    const [isLogin, setIsLogin] = useState(true);
+    const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('')
+    const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+
+    const signUp = async () => {
+        try {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            if (userCredential.user) {
+                await AsyncStorage.setItem('userToken', userCredential.user.uid); // Store user token
+                navigation.navigate("ProfileCreation");
+            }
+        } catch (error) {
+            alert("Sign up Failed: " + error.message);
+        }
+    };
+
+    const signIn = async () => {
+        try {
+            const userCredential = await signInWithEmailAndPassword(auth, email, password);
+            if (userCredential.user) {
+                await AsyncStorage.setItem('userToken', userCredential.user.uid); // Store user token
+                navigation.navigate("ProfileCreation");
+            }
+        } catch (error) {
+            alert("Sign in Failed: " + error.message);
+        }
+    };
+
+    const handleAuth = async () => {
+        if (!isLogin && password !== confirmPassword) {
+            alert("Passwords don't match");
+        } else if (!isLogin) {
+            await signUp();
+        } else {
+            await signIn();
+        }
+    };
+
+    return (
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View style={styles.container}>
+                <Text style={styles.title}>{isLogin ? 'Log In' : 'Sign Up'}</Text>
+                <TextInput
+                    style={styles.input}
+                    placeholder="Email"
+                    placeholderTextColor={"#777"}
+                    keyboardType="email-address"
+                    value={email}
+                    onChangeText={setEmail}
+                />
+
+                <TextInput
+                    style={styles.input}
+                    placeholder="Password"
+                    placeholderTextColor={"#777"}
+                    secureTextEntry
+                    value={password}
+                    onChangeText={setPassword}
+                />
+                {!isLogin && (
+                    <TextInput
+                        style={styles.input}
+                        placeholder="Confirm Password"
+                        placeholderTextColor={"#777"}
+                        secureTextEntry
+                        value={confirmPassword}
+                        onChangeText={setConfirmPassword}
+                    />
+                )}
+                <TouchableOpacity style={styles.button} onPress={handleAuth}>
+                    <Text style={styles.buttonText}>{isLogin ? 'Log In' : 'Sign Up'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setIsLogin(!isLogin)}>
+                    <Text style={styles.switchText}>
+                        {isLogin ? "Don't have an account? Sign up" : "Already have an account? Log in"}
+                    </Text>
+                </TouchableOpacity>
+            </View>
+        </TouchableWithoutFeedback>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: {
+        backgroundColor: '#000',
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    title: {
+        color: "white",
+        fontSize: 24,
+        fontWeight: 'bold',
+        marginBottom: 20,
+    },
+    input: {
+        width: '100%',
+        padding: 10,
+        borderWidth: 1,
+        borderColor: '#ccc',
+        borderRadius: 5,
+        marginBottom: 10,
+        color: "white"
+    },
+    button: {
+        backgroundColor: '#007bff',
+        padding: 10,
+        borderRadius: 5,
+        alignItems: 'center',
+        width: '100%',
+    },
+    buttonText: {
+        color: '#fff',
+        fontSize: 16,
+    },
+    switchText: {
+        marginTop: 10,
+        color: '#007bff',
+    },
+});
+------------------------[CreatePostScreen.js]------------------------
+import React, {useEffect, useState} from "react";
+import {
+    View,
+    TextInput,
+    StyleSheet,
+    TouchableOpacity,
+    Text,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    TouchableWithoutFeedback,
+    Keyboard,
+    Image
+} from "react-native";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import TakePhoto from "../components/PostComponents/TakePhoto";
+import * as FileSystem from "expo-file-system";
+import {getAuth} from "firebase/auth";
+import { collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
+import { db } from "../util/FirebaseConfig"
+import { v4 as uuidv4 } from "react-native-uuid";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {getUserIdFromStorage} from "../helpers/userDataHelperPosts";
+import {uploadImage} from "../helpers/firebasePostHelper";
+
+// File system paths
+const userDir = FileSystem.documentDirectory + 'user';
+const imageDir = FileSystem.documentDirectory + 'images';
+const userFilePath = `${userDir}/user.json`;
+const dirNames = [userDir, imageDir];
+
+
+
+
+/**
+ * Reads and parses the user JSON file.
+ * @returns Parsed user data.
+ */
+const userJSON = async () => {
+    const JSONData = await FileSystem.readAsStringAsync(userFilePath);
+    return JSON.parse(JSONData);
+};
+
+/**
+ * Ensures required directories exist; creates them if they do not.
+ * @param {string[]} dirNames - Array of directory paths.
+ */
+const ensureDirsExist = async (dirNames) => {
+    for (const dir of dirNames) {
+        const dirInfo = await FileSystem.getInfoAsync(dir);
+        if (!dirInfo.exists) {
+            console.log(`Directory ${dir} does not exist, creating ...`);
+            await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+        } else {
+            console.log(`${dir} exists`);
+        }
+    }
+};
+
+
+/**
+ * Main component for creating a post.
+ * @param navigation - Navigation object for navigating screens.
+ */
+export default function CreatePostScreen({ navigation }) {
+    const [description, setDescription] = useState("");
+    const [cameraOn, setCameraOn] = useState(false);
+    const [photo, setPhoto] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [downloadURL, setDownloadURL] = useState(null)
+
+
+    useEffect(() => {
+        const fetchUserId = async () => {
+            const id = await getUserIdFromStorage(); // Retrieve userId from AsyncStorage
+            setUserId(id);
+        };
+        fetchUserId();
+    }, []);
+
+    const userPostCollection = collection(db, 'posts')
+
+    const addPost = async () => {
+    if (userId) {
+        try {
+            const url = await savePhotoToCloud()
+            await addDoc(userPostCollection, {
+                description:description,
+                userId: userId,
+                timestamp: new Date().toISOString(),
+                photoURL: url
+            });
+        } catch (error) {
+            console.error("Error adding post:", error);
+            Alert.alert("Error", "There was an error submitting your post. Please try again.");
+            console.log(user)
+        }
+    }
+};
+    /**
+     * Opens the camera to take a photo.
+     */
+    const handleTakePhoto = () => {
+        setCameraOn(true);
+    };
+
+    /**
+     * Saves the photo locally and updates the user's posts.
+     */
+    // const savePhotoLocally = async () => {
+    //     const photoFileName = photo.uri.split('/').pop();
+    //     const newUri = `${imageDir}/${photoFileName}`;
+    //
+    //     try {
+    //         await FileSystem.moveAsync({
+    //             from: photo.uri,
+    //             to: newUri,
+    //         });
+    //         await updateUserPosts(newUri);
+    //     } catch (error) {
+    //         console.error("Error saving photo:", error);
+    //     }
+    // };
+    const savePhotoToCloud = async () => {
+        return await uploadImage(photo.uri, userId)
+        };
+    /**
+     * Updates the user's posts with a new post entry.
+     * @param {string} photoLocation - Path to the saved photo.
+     */
+    const updateUserPosts = async (photoLocation) => {
+        const data = await userJSON();
+        data.posts.push({
+            timestamp: new Date().toISOString(),
+            description: description,
+            imageFileLocation: photoLocation,
+        });
+        await FileSystem.writeAsStringAsync(userFilePath, JSON.stringify(data, null, 2));
+    };
+
+    /**
+     * Handles submitting the post, ensuring directories exist and saving data.
+     */
+    const handleSubmitPost = async () => {
+        if (description.trim() === "") {
+            Alert.alert("Missing Description", "Please write about your miracle before submitting.");
+            return;
+        }
+
+        await ensureDirsExist(dirNames);
+        await addPost()
+        Alert.alert("Post Submitted", "Your post has been successfully created!");
+        navigation.navigate("FeedScreen")
+    };
+
+    /**
+     * Handles receiving the photo from the camera.
+     * @param photo - Photo object returned by the camera.
+     */
+    const handlePhoto = (photo) => {
+        setCameraOn(false);
+        setPhoto(photo);
+    };
+
+    // Show camera if it is enabled
+    if (cameraOn) return <TakePhoto handleCloseCamera={handlePhoto} />;
+
+    return (
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                <View style={styles.container}>
+                    {/* Back Button */}
+                    <TouchableOpacity
+                        onPress={() => navigation.navigate("FeedScreen")}
+                        style={styles.backButton}
+                    >
+                        <MaterialIcons name="arrow-back" size={30} color="white" />
+                    </TouchableOpacity>
+
+                    {/* Display photo if available */}
+                    {photo && photo.uri && (
+                        <Image
+                            source={{ uri: photo.uri }}
+                            style={styles.postPhoto}
+                            resizeMode="cover"
+                        />
+                    )}
+
+                    {/* Button to open the camera */}
+                    <TouchableOpacity
+                        style={photo ? styles.photoButtonAfter : styles.photoButtonBefore}
+                        onPress={handleTakePhoto}
+                    >
+                        <MaterialIcons name="photo-camera" size={photo ? 30 : 60} color="white" />
+                    </TouchableOpacity>
+
+                    {/* Input for post description */}
+                    <TextInput
+                        style={styles.textInput}
+                        placeholder="Write about your miracle..."
+                        placeholderTextColor="gray"
+                        multiline
+                        value={description}
+                        onChangeText={setDescription}
+                        keyboardType="default"
+                        returnKeyType="done"
+                        onSubmitEditing={Keyboard.dismiss}
+                    />
+
+                    {/* Submit post button */}
+                    <TouchableOpacity style={styles.submitButton} onPress={handleSubmitPost}>
+                        <Text style={styles.submitText}>Submit Post</Text>
+                    </TouchableOpacity>
+                </View>
+            </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
+    );
+}
+
+// Styles
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: "#000",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+    },
+    photoButtonBefore: {
+        width: 80,
+        height: 80,
+        backgroundColor: "#444",
+        borderRadius: 40,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 20,
+    },
+    photoButtonAfter: {
+        width: 50,
+        height: 50,
+        backgroundColor: "#444",
+        borderRadius: 40,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 20,
+    },
+    postPhoto: {
+        width: "50%",
+        height: "30%",
+        borderRadius: 15,
+        marginBottom: 25,
+        borderColor: "#C0c0c0",
+        borderWidth: 3,
+    },
+    backButton: {
+        position: "absolute",
+        top: 50,
+        left: 20,
+        padding: 10,
+    },
+    textInput: {
+        width: "100%",
+        backgroundColor: "#222",
+        borderRadius: 10,
+        color: "white",
+        padding: 15,
+        fontSize: 16,
+        marginBottom: 20,
+        textAlignVertical: "top",
+        minHeight: 150,
+    },
+    submitButton: {
+        backgroundColor: "#007AFF",
+        paddingVertical: 15,
+        paddingHorizontal: 40,
+        borderRadius: 10,
+    },
+    submitText: {
+        color: "white",
+        fontSize: 18,
+        fontWeight: "bold",
+    },
+});
+------------------------[FeedScreen.js]------------------------
+import React, {useEffect, useState} from "react";
+import { View, StyleSheet, Image, SafeAreaView, FlatList, TouchableOpacity, Text } from "react-native";
+import user from "../data/user.json";
+import Post from "../components/PostComponents/Post";
+import { posts } from '../data/posts.json';
+import {getUserIdFromStorage} from "../helpers/userDataHelperPosts";
+import {fetchAllPosts} from "../helpers/firebasePostHelper";
+
+const profilePicture = require("../data/profile.png");
+const logo = require("../assets/Logo.png");
+
+/**
+ * Renders a single post item in the FlatList.
+ * @param {Object} postData - Contains the data of the post to render.
+ * @returns {JSX.Element} A Post component.
+ */
+function renderPost(postData) {
+    return (
+        <Post image={postData.item.data.photoURL} caption={postData.item.caption} />
+    );
+}
+
+/**
+ * Main feed screen of the app.
+ * Displays a header, a feed of posts, and a button to create a post.
+ * @param  navigation - Navigation object for navigating between screens.
+ * @returns The FeedScreen component.
+ */
+function FeedScreen({ navigation }) {
+    const [userId, setUserId] = useState(null)
+    const [posts, setPosts] = useState(null)
+
+    useEffect(() => {
+        console.log("posts",posts)
+    }, [posts]);
+    useEffect(() => {
+        const fetchUserId = async () => {
+            const id = await getUserIdFromStorage(); // Retrieve userId from AsyncStorage
+            setUserId(id);
+        };
+
+        const fetchAllPostsFromFirebase = async () =>{
+            setPosts(await fetchAllPosts())
+        }
+        fetchUserId();
+        fetchAllPostsFromFirebase()
+    }, []);
+
+    return (
+        <SafeAreaView style={styles.safeArea}>
+            {/* Header with app logo and profile picture */}
+            <View style={styles.header}>
+                <Image source={logo} style={styles.logo} />
+                <TouchableOpacity onPress={() => navigation.navigate("Profile")}>
+                    <Image source={profilePicture} style={styles.profilePicture} />
+                </TouchableOpacity>
+            </View>
+
+            {/* Feed container with posts */}
+            <View style={styles.feedContainer}>
+                <FlatList
+                    style={styles.feedList}
+                    data={posts}
+                    renderItem={renderPost}
+                />
+            </View>
+
+            {/* Floating button to navigate to the Create Post screen */}
+            <TouchableOpacity
+                style={styles.prayerButton}
+                onPress={() => navigation.navigate("CreatePost")}
+            >
+                <Text style={styles.prayerText}>🙏</Text>
+            </TouchableOpacity>
+        </SafeAreaView>
+    );
+}
+
+const styles = StyleSheet.create({
+    safeArea: {
+        flex: 1,
+        backgroundColor: "#000", // Set background to black
+    },
+    header: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: "#000", // Header background color
+    },
+    logo: {
+        width: 100,
+        height: 50,
+        resizeMode: "contain",
+    },
+    profilePicture: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+    },
+    feedList: {
+        paddingHorizontal: 5,
+        paddingVertical: 10,
+    },
+    feedContainer: {
+        flex: 1,
+        justifyContent: "flex-start",
+    },
+    prayerButton: {
+        position: "absolute",
+        bottom: 20,
+        right: 20,
+        backgroundColor: "#89CFF0",
+        padding: 15,
+        borderRadius: 50,
+    },
+    prayerText: {
+        fontSize: 40,
+        color: "white",
+    },
+});
+
+export default FeedScreen;
+------------------------[ProfileCreationScreen.js]------------------------
+import React, {useEffect, useState} from 'react';
+import {
+    View,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    StyleSheet,
+    TouchableWithoutFeedback,
+    Keyboard,
+    Alert
+} from 'react-native';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import {auth, db} from "../util/FirebaseConfig";
+import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+import {addDoc, collection, getDocs, query, where} from "firebase/firestore";
+import ProfileImagePicker from "../components/ProfileComponents/ProfileImagePicker";
+import {handleData, usernameExists} from '../helpers/firebaseProfileCreationHelper'
+
+export default function ProfileCreationScreen() {
+    const [firstName, setFirstName] =useState('')
+    const [lastName, setLastName] =useState('')
+    const [username, setUsername] =useState('')
+    const [profilePictureModal, setProfilePictureModal] = useState(false)
+    const [profilePhoto, setProfilePhoto] = useState(null)
+    const [isDupeUsername, setIsDupeUsername] = useState(false)
+    const [userId, setUserId] = useState(null)
+
+    const navigation = useNavigation();
+
+
+    const getUserIdFromStorage = async () => {
+        try {
+            const storedUserId = await AsyncStorage.getItem('userId');
+            if (storedUserId !== null) {
+                setUserId(storedUserId); // Set the userId in state
+            }
+        } catch (error) {
+            console.error('Error retrieving userId from AsyncStorage:', error);
+        }
+    };
+
+    useEffect(()=>{
+        getUserIdFromStorage()
+    }, [])
+
+
+    const handleProfilePhotoModal = (photo) =>{
+        if (!profilePictureModal){
+            setProfilePictureModal(true)
+        }
+        else{
+            if (photo){
+                setProfilePhoto(photo)
+                console.log("Here is photo", photo)
+            }
+            setProfilePictureModal(false)
+        }
+    }
+
+    const handleUsernameCheck = async () =>{
+        console.log(username)
+        const usernameDupeCheck = await usernameExists(username)
+        setIsDupeUsername(usernameDupeCheck)
+    }
+    const sendData = async () =>{
+        if (!firstName) {
+            Alert.alert("First Name is required");
+        } else if (!lastName) {
+            Alert.alert("Last Name is required");
+        } else if (!username) {
+            Alert.alert("Username is required");
+        } else if (!profilePhoto) {
+            Alert.alert("Profile photo is required");
+        } else if (isDupeUsername){
+            Alert.alert("Username is taken")
+        }else
+         {
+            // All fields are present, you can proceed with further actions
+             await handleData(userId, firstName, lastName, username, profilePhoto)
+             navigation.navigate("Profile")
+        }
+
+
+    }
+
+    return (
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+
+            <View style={styles.container}>
+                {profilePictureModal && <ProfileImagePicker onClose={handleProfilePhotoModal}></ProfileImagePicker>}
+
+                <Text style={styles.title}>Create Your Profile</Text>
+                <TextInput
+                    style={styles.input}
+                    placeholder="First Name"
+                    placeholderTextColor={"#777"}
+                    value={firstName}
+                    onChangeText={setFirstName}
+                />
+                <TextInput
+                    style={styles.input}
+                    placeholder="Last Name"
+                    placeholderTextColor={"#777"}
+                    value={lastName}
+                    onChangeText={setLastName}
+                />
+                <TextInput
+                    style={styles.input}
+                    placeholder="Username"
+                    placeholderTextColor={"#777"}
+                    value={username}
+                    onChangeText={setUsername}
+                    onBlur={handleUsernameCheck}
+                />
+                <TouchableOpacity style={styles.button} onPress={handleProfilePhotoModal}>
+                    <Text style={styles.buttonText}>Choose Profile Image</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.button} onPress={sendData}>
+                    <Text style={styles.buttonText}>Create Account</Text>
+                </TouchableOpacity>
+            </View>
+        </TouchableWithoutFeedback>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: {
+        backgroundColor: '#000',
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    title: {
+        color: "white",
+        fontSize: 24,
+        fontWeight: 'bold',
+        marginBottom: 20,
+    },
+    input: {
+        width: '100%',
+        padding: 10,
+        borderWidth: 1,
+        borderColor: '#ccc',
+        borderRadius: 5,
+        marginBottom: 10,
+        color: "white"
+    },
+    button: {
+        backgroundColor: '#007bff',
+        padding: 10,
+        borderRadius: 5,
+        alignItems: 'center',
+        width: '100%',
+        marginBottom:10
+    },
+    buttonText: {
+        color: '#fff',
+        fontSize: 16,
+    },
+    switchText: {
+        marginTop: 10,
+        color: '#007bff',
+    },
+});
+------------------------[ProfileScreen.js]------------------------
+import { Image, View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Button } from 'react-native';
+import { useEffect, useState } from "react";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fetchPosts } from '../helpers/firebasePostHelper'; // Firebase helper
+import { readUserData } from '../helpers/userDataHelperPosts';
+import {clearUserPosts} from "../helpers/firebasePostHelper";// User data helper
+import {getData, getProfilePicture} from "../helpers/firebaseProfileData";
+import { getAuth } from "firebase/auth";
+import { auth } from "../util/FirebaseConfig";
+import ProfileScreenPosts from "../components/ProfileComponents/ProfileScreenPosts";
+
+// ProfileScreen Component
+// ProfileScreen Component
+function ProfileScreen({ navigation }) {
+    const [userData, setUserData] = useState(null);
+    const [userId, setUserId] = useState(null);  // State for storing userId
+    const [postData, setPostData] = useState(null); // State for storing posts data
+    // Fetch userId from AsyncStorage
+    const getUserIdFromStorage = async () => {
+        try {
+            const storedUserId = await AsyncStorage.getItem('userId');
+            if (storedUserId !== null) {
+                setUserId(storedUserId); // Set the userId in state
+            }
+        } catch (error) {
+            console.error('Error retrieving userId from AsyncStorage:', error);
+        }
+    };
+
+    // Initialize data and fetch userId on component mount
+    useEffect(() => {
+        getUserIdFromStorage(); // Retrieve userId from AsyncStorage
+        const fetchData = async () => {
+            const data = await getData();
+            setUserData(data);
+
+        };
+        fetchData();
+    }, []);
+
+    // Fetch posts from Firestore when userId is available
+    useEffect(() => {
+        if (userId) {
+            fetchPosts(userId).then(fetchedPosts => {
+                setPostData(fetchedPosts); // Update postData state
+            });
+        }
+    }, [userId]);
+
+    // Handle user sign-out
+    const handleSignOut = async () => {
+        try {
+            navigation.navigate("Auth");
+            await auth.signOut(); // Firebase sign-out method
+            await AsyncStorage.removeItem('userId'); // Remove userId from AsyncStorage
+            console.log("User signed out.");
+        } catch (error) {
+            console.error("Error signing out:", error);
+        }
+    };
+
+    // Clear user posts
+    const clearPosts = async () => {
+        await clearUserPosts(userId); // Clear posts in local storage
+    };
+
+    // Profile picture and greeting text
+    const imageSources = {
+        "profile.png": require('../data/profile.png'),
+    };
+
+    // Make sure userData is not null before destructuring
+    const { firstName, lastName, profilePhotoUrl, username } = userData || {};
+    console.log(profilePhotoUrl, "DADDY")
+
+    // Component rendering
+    return (
+        <SafeAreaView style={styles.container}>
+            {/* Back button */}
+            <TouchableOpacity
+                onPress={() => navigation.navigate("FeedScreen")}
+                style={styles.backButton}
+            >
+                <MaterialIcons name="arrow-back" size={30} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity
+                onPress={handleSignOut}
+                style={styles.signOutButton}
+            >
+                <MaterialIcons name={"logout"} size={30} color="red"></MaterialIcons>
+            </TouchableOpacity>
+
+            {/* Profile picture */}
+
+            {profilePhotoUrl && <Image
+                source={{uri:profilePhotoUrl}}
+                style={styles.profileImage}
+            />
+            }
+            {/* User greeting and pins */}
+            <Text style={styles.greetingText}>Hello {firstName} 👋</Text>
+            <Text style={styles.pinsText}>📌 Pins</Text>
+
+            {/* Clear posts button */}
+            <Button title={"Clear Posts"} onPress={clearPosts} />
+
+            {/* Render posts if postData exists */}
+            {postData && <ProfileScreenPosts postData={postData} />}
+        </SafeAreaView>
+    );
+}
+
+
+// Styles
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        alignItems: 'center',
+        backgroundColor: 'black',
+    },
+    profileImage: {
+        marginTop: 15,
+        width: 120,
+        height: 120,
+        borderRadius: 60,
+        borderWidth: 2,
+        borderColor: 'white',
+        marginBottom: 20,
+    },
+    greetingText: {
+        fontSize: 24,
+        color: 'white',
+        fontWeight: 'bold',
+        marginBottom: 10,
+    },
+    pinsText: {
+        fontSize: 18,
+        color: 'lightgray',
+    },
+    backButton: {
+        position: 'absolute',
+        top: 50,
+        left: 20,
+        padding: 10,
+    },
+    signOutButton: {
+        position: 'absolute',
+        top: 50,
+        right: 20,
+        padding: 10,
+    },
+});
+
+export default ProfileScreen;
