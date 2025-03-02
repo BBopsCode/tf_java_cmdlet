@@ -130,7 +130,7 @@ public class TextFilePrepApp {
             System.err.println("Opening files is not supported on this platform.");
         }
     }
-    //This function is used to send the file contents to a txt
+    //This function is used t send the file contents to a txt
     private static void processFile(String fileName) {
         Path filePath = Paths.get(fileName).toAbsolutePath();
         if (processedFiles.contains(filePath.toString())) {

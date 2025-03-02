@@ -4,7 +4,7 @@ public class JavaVersionCheck {
         String jreVersion = System.getProperty("java.runtime.version");
         String jvmVersion = System.getProperty("java.vm.version");
 
-        System.out.println("Java Version: " + javaVersion);
+        System.out.println("Java Version is: " + javaVersion);
         System.out.println("JRE Version: " + jreVersion);
         System.out.println("JVM Version: " + jvmVersion);
     }

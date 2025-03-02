@@ -35,4 +35,4 @@ While the current version of the software meets the basic requirements, there ar
 
 1. **Recursive Directory Search**: Add an option to recursively search subdirectories and include their files in the output.
 2. **Duplicate Code Handling**: Fix the bug where duplicate code is sometimes saved in the output file.
-3. **LLM API Integration**: Implement functionality to directly send the output.txt file to an LLM API, eliminating the need for manual copying and pasting.
+3. **LLM API Integration**: Implement the functionality to directly send the output.txt file to an LLM API, eliminating the need for manual copying and pasting.
